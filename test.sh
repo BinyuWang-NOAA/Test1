@@ -1,3 +1,3 @@
 #!/bin/sh
 #
-THIS TESTS
+THIS TEST
