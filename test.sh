@@ -1,4 +1,5 @@
 #!/bin/sh
 #
 THIS TESTS
-TEST MORE
+TEST MORA
+TEST 1E
