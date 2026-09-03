@@ -1,0 +1,152 @@
+#!/bin/sh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_POST
+# RFC Contact:	Binyu Wang, EMC
+# Author:	Barbara Stunder, NOAA OAR Air Resources Laboratory
+# Abstract:     This is the main driver script for the HYSPLIT POST to set the
+#               processing variables for the on-demand HYSPLIT SDM runs (volcanic ash,
+#               radiological (RSMC), small scale / homeland security (hls).  
+#               This job is run from JHYSPLIT_DATACHK following JHYSPLIT_FCST.
+#
+# Script History Log:
+#  1999 Jun 17 - created
+#  2011 May 26 - docblock
+#
+# Usage:       
+#
+#  Script Parameters:
+#
+#  Modules and Files referenced:
+#
+#    scripts: exhysplit_post.sh
+#             hiresw_get_hls_nest.sh
+#
+#    parms:          
+#
+#    fix:          
+#
+#    executables:       
+#
+#    input file: ${COMSTAMP}/ondemand_hysplit.stamp
+#
+#    other: 
+#
+# Condition codes: 241 - script exhysplit_post.sh failed
+#
+# User controllable options:
+#
+# Attributes:
+#     Language:  AIX UNIX
+#     Machine:   NCEP CCS
+#
+
+set -xa
+export PS4='$SECONDS + '
+date
+
+# Setup directories and common environment variable
+export NET=${NET:-hysplit}
+export RUN=${RUN:-hysplit}
+
+export GESDIR=${GESDIR:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/input}
+
+# #### 06/17/99 #####################
+# SET HYSPLIT PROCESSING VARIABLES
+# See cyc PDY at Run setpdy and initialize PDY variables
+# ###################################
+
+export NEST=""
+
+# obtain unique process id (pid) and make temp directory
+#
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export outid=${outid:-LL$job}
+[ $envir != prod ]  && export outid="LL${job}_${envir}"
+export jobid="${outid}.o${pid}"
+export pgmout="OUTPUT.${pid}"
+
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/$envir/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+mkdir -m 775 -p $DATA
+cd $DATA
+
+export cycle=${cycle:-t${cyc}z}
+
+export SENDWEB=${SENDWEB:-YES}
+export SENDCOMCANNEDWFO=${SENDCOMCANNEDWFO:-YES}
+export SENDALASKA=${SENDALASKA:-NO}
+export SENDFTP=${SENDFTP:-YES}
+export SENDCOM=${SENDCOM:-NO}
+
+export DBNALERT_RDOACT=${DBNALERT_RDOACT:-HYSRDOACT}
+export DBNALERT_NAWIPS=${DBNALERT_NAWIPS:-VAFTAD_GEMPAK}
+export DBNALERT_VAFTAD=${DBNALERT_VAFTAD:-VAFTAD_VGF}
+export DBNALERT_VAFTAD_META=${DBNALERT_VAFTAD_META:-VAFTAD_META}
+export DBNALERT_VAFTAD_GRIB=${DBNALERT_VAFTAD_GRIB:-VAFTAD_GRIB}
+export run_type=${run_type:-on_demand}
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-$HOMEhysplit/exec}
+export FIXhysplit=${FIXhysplit:-$HOMEhysplit/fix}
+export PARMhysplit=${PARMhysplit:-$HOMEhysplit/parm}
+export USHhysplit=${USHhysplit:-$HOMEhysplit/ush}
+export EVENT=ncorzdm
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+##############################################
+# Get current PDY and HOUR (CYC)
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+export COMSTAMP=${COMSTAMP:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/timestamps}
+
+export cyc=`cat ${COMSTAMP}/ondemand_hysplit.stamp | cut -c9-10`
+export PDY=`cat ${COMSTAMP}/ondemand_hysplit.stamp | cut -c1-8`
+
+export cycle=t${cyc}z
+setpdy.sh
+. ./PDY
+
+export COMIN=${COMIN:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMINPUT=${COMINPUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/input}
+export COMOUTSDM=${COMOUTSDM:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/sdm/${PDY}}
+export COMOUTSDMWFO=${COMOUTSDMWFO:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/sdm/wfo/${PDY}}
+
+export COMOUTCANNEDWFO=${COMOUTCANNEDWFO:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/canned_wfo.${PDY}}
+export WFO_FCST_IN=${WFO_FCST_IN:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})}
+export COMOUTnawips=${COMOUTnawips:-${COMOUT}/gempak/outvgf}
+
+mkdir -p ${COMOUTCANNEDWFO} ${COMOUT} ${COMOUTnawips} ${COMOUTSDMWFO} ${COMOUTSDM}
+
+env
+
+########################################################
+# Execute the script.
+########################################################
+${HOMEhysplit}/scripts/exhysplit_ondemand_post.sh
+export err=$?; err_chk
+
+if [ -s $pgmout ]; then
+  cat $pgmout
+fi
+msg="$job completed normally"
+postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u

@@ -1,0 +1,169 @@
+#!/bin/sh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_POST
+# RFC Contact:	Binyu Wang, EMC
+# Author:	Barbara Stunder, NOAA OAR Air Resources Laboratory
+# Abstract:     This is the main driver script for the HYSPLIT POST to set the
+#               processing variables for CTBTO post (plotting and generating text 
+#               for CTBTO 
+#               This job is run from JHYSPLIT_CTBTOCHK following JHYSPLIT_CTBTO_FCST.
+#
+# Script History Log:
+#  Sept 25, 2013 by Ho-Chun Huang  
+#               28 FEB 2017 (HCH) - modified for mpmd processing
+# 
+#  
+#
+# Usage:       
+#
+#  Script Parameters:
+#
+#  Modules and Files referenced:
+#
+#    scripts: exhysplit_ctbto_post.sh
+#
+#    parms:          
+#
+#    fix:          
+#
+#    executables:       
+#
+#    input file: $COMSTAMP/ondemand_hysplit.stamp
+#
+#    other: 
+#
+# Condition codes: 241 - script exhysplit_post.sh failed
+#
+# Notes: 1. PARAFLAG environment variable set to YES for non-NCO testing
+#        2. SENDCOMHLS dates to output files with restricted permissions 
+#
+# User controllable options:
+#
+# Attributes:
+#     Language:  AIX UNIX
+#     Machine:   NCEP WCOSS 
+############################################################
+set -xa
+export PS4='$SECONDS + '
+date
+
+####################################
+# Specify NET and RUN
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-ctbto}
+
+###############################################################
+# This block can be modified for different Production test
+# environment. This is used for operational testings
+###############################################################
+if [ $envir != prod ]; then
+  export MAILTO=${MAILTO:-"nco.spa@noaa.gov"}
+  # JY- will check with SDM for the following location
+  export COMOUT_INTRA=${COMOUT_INTRA:-/home/nco/ctbto/runtime/results/para}
+else
+  export MAILTO=${MAILTO:-"sdm@noaa.gov,nco.sos@noaa.gov"}
+fi
+
+####################################
+# hiresw_nesttimes obsolete - is $NEST needed?
+# 12-5-12 - file on CCS is not related to what this hiresw used to be
+#export NEST=${NEST:-`grep t${cyc}z /nwprod/fix/hiresw_nesttimes | awk '{print $2}'`}
+#export NEST=
+####################################
+
+############################################################
+# obtain unique process id (pid) and make temp directory
+############################################################
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+cd ${DATA}
+
+## export MP_PULSE=0
+
+export SENDWEB=${SENDWEB:-YES}
+export SENDSDM=${SENDSDM:-YES}
+
+export run_type=${run_type:-on_demand}
+
+####################################
+# Path to HOME Directory
+####################################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-$HOMEhysplit/exec}
+export FIXhysplit=${FIXhysplit:-$HOMEhysplit/fix}
+export USHhysplit=${USHhysplit:-$HOMEhysplit/ush}
+
+####################################
+#export SDM_PRNTR=hp26_auto
+#export SDM_PRNTR2=`cat /u/SDM/printer/sdmprint`
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+##############################
+# Get current PDY and HOUR (CYC)
+##############################
+export COMSTAMP=${COMSTAMP:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/timestamps}
+export cyc=`cat $COMSTAMP/ctbto_hysplit.stamp | cut -c9-10`
+export PDY=`cat $COMSTAMP/ctbto_hysplit.stamp | cut -c1-8`
+
+export cycle=t${cyc}z
+
+export COMIN=${COMIN:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export DCOM=${DCOM:-${DCOMROOT}/ctbto}
+export INTRAENVIR=${INTRAENVIR:-$envir}
+if [ "${PARATEST^^}" != YES ]; then
+    export COMOUT_INTRA=${COMOUT_INTRA:-/home/nco/ctbto/runtime/results}
+   if [ "${INTRAENVIR}" == para ]; then
+      export COMOUT_INTRA=${COMOUT_INTRA:-/home/nco/ctbto/runtime/results/para}
+   fi    
+else
+    export COMOUT_INTRA=${COMOUT_INTRA:-/home/nco/ctbto/runtime/results/para}
+fi
+export MACHINE=${MACHINE:-intra}
+export INTRA_USER=${INTRA_USER:-nwprod}
+mkdir -p $COMOUT
+
+env
+
+########################################################
+# Execute the script.
+########################################################
+${HOMEhysplit}/scripts/exhysplit_ctbto_post.sh
+export err=$?; err_chk
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+ 
+msg="job has ended"
+postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u

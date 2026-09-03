@@ -1,0 +1,302 @@
+#!/bin/ksh
+
+#JHYSPLIT_PREP_GFS_NCEPPOST
+#
+# This runs two scripts
+#  (1) exhysplit_gfs_nceppost.sh.latlon.ecf
+#        This is a variant of the operational gfs script
+#          except it outputs data on a latlon grid and
+#          on gfs-native hybrid levels, instead of on a
+#          Gaussian grid and on pressure levels
+#        Creates "master" grib files which stay in $DATA
+#          (COMOUT=$DATA)
+#  (2) exhysplit_global2arl.sh
+#        This inputs the master files just created,
+#          converts them to ARL/HYSPLIT-format, and
+#          writes the HYSPLIT-format file to $COMOUT_HYSPT
+#
+# Also, this job is run with run360=YES for each forecsat hour 
+#    separately 000-360, and once with run360=NO for f006 from
+#    the previous cycles and then it converts to ARL-HYSPLIT
+#
+# Trigger is availablility of the f360 gfs nc files
+#
+# Last revised: Feb 2017 for nems_gfs and grib2, Phase II
+# Last revised: Sep 2020 for GFS.v16. Unique NT-HYSPLIT and HYBLEV files
+#                          secify which fields, levels to get (see below)
+#                          And some forcing in global2arl.f.
+# July 2024: increased the forecast levels from 56 to 60,
+#            extended the forecast period from 84 hours to 15 days 
+# Feb 2026: GFS was upgraded to v17, upp_v11 was used to do the converting.           
+#############
+
+set -xa
+
+export PS4='$SECONDS + '
+date
+
+####################################
+# Specify RUN Name and model
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-gfs}
+export RUNspec=${RUNspec:-gfs}
+
+export cycle=${cycle:-t${cyc}z}
+export pid=$$
+export res=p25
+
+# run360 need to be defined prior to the call of this j-jobs
+if [ "${run360}" != "YES" -a "${run360}" != "NO" ]; then 
+   echo "${run360} is set as ${run360}, need to be set as either YES or NO "
+   export err=99; err_chk
+fi
+
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+
+if [ ! -d  $DATA ]; then mkdir -p $DATA; fi
+cd $DATA
+
+setpdy.sh
+. PDY
+
+export COMINgfs=${COMINgfs:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/hysplit.${PDY}/nceppost/${cyc}}
+if [ ! -d  $COMINgfs ]; then mkdir -p $COMINgfs; fi
+
+
+if [ "${run360}" == "YES" ]; then
+  export DATAgfs=${DATAgfs:-${DATA}/${post_times}}
+else
+  export DATAgfs=${DATAgfs:-"${DATA}/006b"}
+fi
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -p  $DATAgfs
+cd $DATAgfs
+rm -rf ${DATAgfs}/*
+
+####################################
+# Specify version numbers
+####################################
+
+export GRIBVERSION=${GRIBVERSION:-'grib2'}
+
+# required variable in $USHglobal/hysplit_global_nceppost.sh
+export ens=${ens:-NO}
+
+export FHR_MAX=${FHR_MAX:-360}  #360
+
+####################################
+# Determine Job Output Name on System
+####################################
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+export outid="LL$job"
+export pgmout=${pgmout:-"OUTPUT.${pid}"}
+export pgmerr=${pgmerr:-errfile}
+export ERRSCRIPT=err_chk
+export LOGSCRIPT=startmsg
+export REDOUT='1>>'
+export REDERR='2>'
+
+####################################
+# SENDECF  - Flag Events on ECF
+# SENDCOM  - Copy Files From TMPDIR to $COMOUT
+# SENDDBN  - Issue DBNet Client Calls
+# RERUN    - Rerun posts from beginning (default no)
+# VERBOSE  - Specify Verbose Output in global_postgp.sh
+####################################
+export SENDECF=${SENDECF:-YES}
+export SENDCOM=${SENDCOM:-YES}
+export SENDDBN=${SENDDBN:-YES}
+export RERUN=${RERUN:-NO}
+export VERBOSE=${VERBOSE:-YES}
+
+export DBNALERT_TYPE=${DBNALERT_TYPE:-HYSGFS0P25F}
+
+####################################
+# Specify Execution Areas
+####################################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export USHhysplit=${USHhysplit:-${HOMEhysplit}/ush}
+export EXEChysplit=${EXEChysplit:-${HOMEhysplit}/exec}
+export FIXhysplit=${FIXhysplit:-${HOMEhysplit}/fix}
+export PARMhysplit=${PARMhysplit:-${HOMEhysplit}/parm}
+
+export HOMEgfs=${HOMEgfs:-${HOMEhysplit}}
+export EXECgfs=${EXECgfs:-${EXEChysplit}}
+export FIXgfs=${FIXgfs:-${FIXhysplit}}
+export USHgfs=${USHgfs:-${USHhysplit}}
+export SCRgfs=${SCRgfs:-${HOMEgfs}/scripts}
+export PARMpost=${PARMpost:-${PARMhysplit}}
+
+#export SIGHDR=${SIGHDR:-$EXECgfs/global_sighdr}
+# These NT-HYSPLIT files specify which fields to get
+export PostFlatFile000=${PostFlatFile000:-${PARMpost}/postxconfig-NT-HYSPLIT-F000.txt}
+export PostFlatFile=${PostFlatFile:-${PARMpost}/postxconfig-NT-HYSPLIT.txt}
+        
+##############################################
+# Define COM directories
+##############################################
+export COMMDLINROOT=${COMMDLINROOT:-$(compath.py ${envir}/com/${RUN}/${gfs_ver})}
+export COMMDLIN=${COMMDLIN:-${COMMDLINROOT}/${RUN}.${PDY}/${cyc}/atmos}
+
+export COMOUT_HYSPT=${COMOUT_HYSPT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${NET}.${PDY}}
+mkdir -m 775 -p ${COMOUT_HYSPT}
+
+export POSTGRB2TBL=${POSTGRB2TBL:-"${PARMhysplit}/params_grib2_tbl_new"}
+export POSTGPEXEC=${POSTGPEXEC:-$EXEChysplit/upp.x}
+export POSTGPSH=${POSTGPSH:=${USHhysplit}/hysplit_prep_gfs_nceppost.sh}
+export TRIMRH=${TRIMRH:=${USHhysplit}/hysplit_prep_gfs_nceppost_trim_rh.sh}
+# This HYBLEV file specifies which of the 128 level to get.  
+#   Generally this is every-other level up a ways to have the same number of levels
+#   as in gfs.v15.  hysplit_global2arl 
+#export HYBLEV=${HYBLEV-:global_hyblev.l128_hysplit.l55}
+export HYBLEV=${HYBLEV:-"global_hyblev.l128_hysplit.l55.txt"}
+
+####################################
+# Specify Special Post Vars
+####################################
+if [ $RUN = gfs ];then
+  export FHOUT_PGB=${FHOUT_GFS:-3} #Output frequency of gfs pgb file at 1.0 and 0.5 deg.
+fi
+
+if [ $GRIBVERSION = grib2 ]; then
+  export IGEN_ANL="anal_gfs"
+  export IGEN_FCST="gfs_avn"
+  export IGEN_GFS="gfs_avn"
+fi
+    
+export restart_file=${restart_file:-${DATAgfs}/${RUN}.t${cyc}z.logf}
+
+export PGBF=NO
+export PGB1F=NO
+export FLXF=NO
+export GOESF=NO
+export WAFSF=NO
+
+#######################################
+# Specify Restart File Name to Key Off
+#######################################
+if [ ${post_times} = 'anl' ]; then
+   msg="FATAL ERROR - HYSPLIT does not use anl"
+   postmsg "$msg"
+   err_exit
+else
+   # create a dummy logf file
+  #  cp ${restart_file}${post_times}.txt ${DATA}
+  # Barbara comment out touch stmt 4-16-2020
+  touch ${DATAgfs}/${RUN}.t${cyc}z.logf${post_times}.nc
+  export restart_file=${DATAgfs}/${RUN}.t${cyc}z.logf
+fi
+
+# if running bsub for hours 000 through 360
+if [ "${run360}" = "YES" ]; then
+      export SLEEP_TIME=${SLEEP_TIME:-900}
+      export SLEEP_INT=${SLEEP_INT:-5}
+
+      ${SCRgfs}/exhysplit_prep_gfs_nceppost_latlon.sh
+      export err=$?; err_chk
+      date
+      
+   ####################################################################
+   # DO NOT remove the Temporary working directory for run360=YES, i.e., DATA
+   # Those hourly temporary running directories need to be kept available
+   # for last run with run360=NO
+   ####################################################################
+else       ## run360=NO
+# this section for hours 006 from previous cycle (024 if one cycle a day)
+#   and global2arl for all fhr's
+
+   export allfhr=${allfhr:-006}
+   export FHR_START=${FHR_START:-000}
+   export ENDHRS=${allfhr}
+   export FHR_MAX=${FHR_MAX:-360} #360
+   ### save values to go back to them after from post of prev cycle file
+   cyc_save=${cyc}
+   cycle_save=${cycle}
+   PDY_save=${PDY}
+
+   #### now get f006 from previous cycle. Forecast fields such as precip
+   ####   and fluxes will be written to the +0 hour of the output file
+   ####   written to $COMOUT_HYSPT
+   previous=$( ${NDATE} -${allfhr} ${PDY}${cyc} )
+   PDYprev=`echo ${previous} | cut -c1-8`
+   export PDY=${PDYprev}
+   cycprev=`echo ${previous} | cut -c9-10`
+   export cyc=${cycprev}
+   export cycle=t${cyc}z
+#   export COMMDLIN=${COMMDLINROOT}/${RUN}.${PDYprev}/${cycprev}/atmos #OLD
+   export COMMDLIN=${COMMDLINROOT}/../../../../../${RUN}.${PDYprev}/${cycprev}/model/atmos/history
+#  -------------------------------------------------------------------------
+   typeset -Z3 post_times ENDHR INCR
+
+   export post_times=${post_times:-"${allfhr}"}
+   export ENDHRS=${ENDHRS:-$allfhr}
+   export INCR=${INCR:-003}
+
+   while [ $post_times -le $ENDHRS ];do
+      echo "post_times: ${post_times}"
+      export post_times
+      export SHOUR=192
+      export FHOUR=204
+      export FHINC=12
+      export HDMAX=36
+      ####################################
+      # Specify Timeout Behavior of Post
+      #
+      # SLEEP_TIME - Amount of time to wait for
+      #              a restart file before exiting
+      # SLEEP_INT  - Amount of time to wait between
+      #              checking for restart files
+      ####################################
+      export SLEEP_TIME=${SLEEP_TIME:-900}
+      export SLEEP_INT=${SLEEP_INT:-5}
+
+      date
+      #############################################################
+      # Execute the script
+      #############################################################
+      $SCRgfs/exhysplit_prep_gfs_nceppost_latlon.sh
+      export err=$?; err_chk
+
+      date
+
+      ((post_times=post_times+INCR))
+      if [ $post_times -lt 100 ];then post_times="0"${post_times};fi
+   done
+
+   ### reset
+   cyc=${cyc_save}
+   cycle=${cycle_save}
+   PDY=${PDY_save}
+   export DATA=${DATA}
+
+   cd ${DATA}
+
+   # convert to HYSPLIT-format
+   export PDYprev
+   export cycprev
+
+   #############################################################
+   # Execute the script to convert master files to HYSPLIT-format
+   #############################################################
+   ${SCRgfs}/exhysplit_prep_gfs_nceppost_global2arl.sh
+   export err=$?; err_chk
+
+   ##########################################
+   # Remove the Temporary working directories
+   ##########################################
+fi
+
+if [ "$KEEPDATA" != "YES" ] ; then
+   cd $DATAROOT
+   rm -rf $DATA
+fi
+
+   date -u
+
+exit
+
+

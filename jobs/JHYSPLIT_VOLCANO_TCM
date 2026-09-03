@@ -1,0 +1,147 @@
+#!/bin/ksh
+
+# purpose of J-job 
+# 1. set up location (application/data directory) variables
+# 2. setup temporal (date/cycle) variables
+# 3. initialize data and working directories
+# 4. call the ex-script
+# downstream scripts use variables established in the J-job.
+# all variables relating to environment in which job will be fun must be set in job card or j-job.
+# j-job must be written in bash or korn shell.
+
+# ex-script is main driver for application
+# 1. data staging in the working directory
+# 2. setting up model-specific variables
+# 3. moving data to long-term storage
+# 4. sending products via DBNet
+# 5. perform appropriate validation and error checking.
+# 6. may call one more more ush (utility) scripts.
+# ex and utility scripts can be written in bash, korn shell, perl, or python.
+# ex scripts must be named as exaaaaaa.py (replace aaaaaa with appropriate lower case letters)
+# underscores are permitted.
+#
+
+date
+export PS4=' $SECONDS + '
+set -xa
+
+# ****************************************************************
+# JHYSPLIT_VOLCANO_TCM
+#
+# Job script for volcanic tcm
+# Stunder 31 Jan 2005 - 
+#         08 May 2006 - revised from dispersion to trajectories
+#         05 Feb 2015 - for NCO, turn off NAM option, force gfs0p5 instead of gfs
+# Crawford 17 Jul 2024 - adapted from JHYSPLIT_VOLCANO_TRAJ
+# Crawford 16 Oct 2024 - changed location of exhysplit script.
+# Crawford 16 Oct 2024 - added HYSPLIT_PYTHON_INIT variable for python setup in exhysplit script
+# ****************************************************************
+# for test run of only 1 site set TEST=1, else TEST=0
+#export TEST=0
+
+####################################
+# Specify NET and RUN
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-volctcm}
+export cyc=${cyc:-00}
+###############################################################
+# obtain unique process id (pid) and make temp directory
+###############################################################
+export pid=${pid:-$$}
+
+HYSPLIT_PYTHON_INIT=0
+
+export PBS_JOBNAME=${PBS_JOBNAME:-'volc'}
+export PBS_JOBID=${PBS_JOBID:-'test'}
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p $DATA
+cd $DATA
+
+export SENDCOM=${SENDCOM:-YES}
+export SENDDBN=${SENDDBN:-YES}
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+###################################
+# directories
+###################################
+export HOMEhysplit=${HOMEhysplit:-/hysplit-users/alicec/emchysplit/}
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-${HOMEhysplit}/exec}
+export USHhysplit=${USHhysplit:-${HOMEhysplit}/ush}
+export FIXhysplit=${FIXhysplit:-${HOMEhysplit}/fix}
+
+# The compath.py utility is used to discover the current absolute path of a given com directory and is
+# used to set COMIN and COMOUT variables in J-jobs. compath.py accepts the relative path of the
+# directory you wish to use data from as an argument; the corresponding absolute path is returned:
+# COMINROOTgfs0p25   path to meteorological dataset used for runs.
+# COMOUT             path for zipped output files
+#  
+export COMINROOT=${COMINROOT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})}
+export COMINROOTgfs0p25=${COMINROOTgfs0p25:-$(compath.py ${NET}/${hysplit_ver})}
+export COMINjson=${COMINjson:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/input/volcanic_tcm}
+
+# Set PDY and cyc based on the input json file for ondemand run.
+if [ ! -z $ondemand ]; then
+  date_str=$(grep "simulation_start" ${COMINjson}/volctcminputs_99.json | grep -o '[0-9:]\+' | tail -1)
+  IFS=':' read -r year month day hour <<< "$date_str"
+  export PDY=$(printf "%04d%02d%02d" "$year" "$month" "$day")
+  export cyc=$hour
+fi
+
+
+##############################################
+# Run setpdy and initialize PDY variables
+# PDY is set according the cycle variable.
+##############################################
+export cycle=t${cyc}z
+
+setpdy.sh
+. ./PDY
+
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}/${cyc}/}
+
+
+if [ "${SENDCOM}" = "YES" ]; then
+   mkdir -m 775 -p $COMOUT
+fi
+
+env
+
+########################################################
+#execute the script.
+########################################################
+${HOMEhysplit}/scripts/exhysplit_${ondemand}volcano_tcm.sh 
+export err=$?; err_chk
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+ 
+msg="$job completed normally"
+#postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u
+
+exit

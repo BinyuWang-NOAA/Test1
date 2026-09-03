@@ -1,0 +1,213 @@
+#!/bin/ksh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_FCST
+# RFC Contact:	Binyu Wang, EMC
+# Author:	Barbara Stunder, NOAA OAR Air Resources Laboratory
+# Abstract:     This is the main driver script for the HYSPLIT FCST to set the
+#               processing variables for CTBTO 
+#               This job is run from JHYSPLIT_CTBTOCHK
+#               following the SDM running setup_hysplit_script. DATACHK also runs
+#               JHYSPLIT_POST
+#
+# Script History Log:
+#  1999 Jun 17 - created (NCO)
+#  2002 May 23 - add test for user mgc0bs for ARL testing; please leave this for ARL testing
+#  2003 Mar 05 - frost - change ghostscript to 7.05 from 5.10
+#  2010 Apr    - restructure for multi-task version of hysplit dispersion (hysplit_hymodelm)
+#  2011 May 26 - docblock
+#  2017 FEB 28 - modified for mpmd processing (HCH)
+#  2019 Aug 04 - Dell (Phase 3)
+#  2025 Feb    - remove MPMD, and replace hysplit_hycsstd with hysplit_hycmtd;
+#                add the restart capability    
+#
+# Usage:       
+#
+#  Script Parameters:
+#
+#  Modules and Files referenced:
+#
+#    scripts: exhysplit_fcst_setup.sh
+#             exhysplit_fcst_out.sh
+#
+#    parms:          
+#
+#    fix:               
+#
+#    executables:       
+#
+#    input file: 1.  $COMSTAMP/ondemand_hysplit.stamp
+#                2. This application uese the converted hysplit format GDAS as input. COMINgdas* are
+#                   from "/lfs/h1/ops/prod/com/hysplit/$hysplit.ver/gdas.YYYYmm"
+#    other: 1. PARAFLAG environment variable set to YES for non-NCO testing
+#           2. Option for using 'canned' input meteorology $COM_CANNED and $COM_P6
+#           3. exhysplit_fcst_setup is run, then if successful,
+#              exhysplit_fcst_out is run
+#
+# Condition codes:
+#            err_chk should catch NCO errors, file FCST_ERR non-NCO errors
+#
+# User controllable options:
+#
+# Attributes:
+#     Language:  AIX UNIX
+#     Machine:   NCEP WCOSS 
+#
+####
+
+set -xa
+export PS4='$SECONDS + '
+date -u
+
+####################################
+# Specify NET and RUN
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-ctbto}
+
+###############################################################
+# obtain unique process id (pid) and make temp directory
+###############################################################
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+
+cd ${DATA}
+
+export MP_PULSE=0
+export MP_BINDPROC=yes	# added this but job doesn't run with both "yes" and "no"
+
+####################################
+# Specify Execution Areas
+####################################
+
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-$HOMEhysplit/exec}
+export FIXhysplit=${FIXhysplit:-$HOMEhysplit/fix}
+export USHhysplit=${USHhysplit:-$HOMEhysplit/ush}
+
+###################################
+# Set up the UTILITIES
+###################################
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+# Run setpdy and initialize PDY variables
+export COMSTAMP=${COMSTAMP:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/timestamps}
+export cyc=`cat $COMSTAMP/ctbto_hysplit.stamp | cut -c9-10`
+export PDY=`cat $COMSTAMP/ctbto_hysplit.stamp | cut -c1-8`
+
+export cycle=${cycle:-t${cyc}z}
+
+export YR=`echo $PDY | cut -c1-4`
+export MN=`echo $PDY | cut -c5-6`
+if [ $MN = '01' ] ; then
+ let "MNm1=12"
+ let "YRm1=YR-1"
+else
+ let "MNm1=MN-1"
+ let "YRm1=YR"
+fi
+typeset -Z2 MN MNm1
+typeset -Z4 YR YRm1
+
+export com=${com:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})}
+export COMIN=${COMIN:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export DCOM=${DCOM:-${DCOMROOT}/ctbto}
+export COMINgdas=${COMINgdas:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.${YR}${MN}}
+export COMINgdasm1=${COMINgdasm1:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.${YRm1}${MNm1}}
+##
+## Locate the current7days files in new gdas file structure
+## If SDM run retro case of 2015103013 on 20151112, one can not
+## find current7days in ${COMINgdas}, i.e., $(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.201510.
+## "current7days" is always placed in the gdas.${current_month},
+## i.e., $(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.201511
+##
+#TDYHH=$PDY$cyc
+TDYHH=$($NDATE)
+TDYmonth=`echo ${TDYHH} | cut -c1-6`
+export COMINgdaslatest=${COMINgdaslatest:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.${TDYmonth}}
+if [ ! -e ${COMINgdaslatest}/current7days ]; then
+   echo "WARNING WARNING can not find ${COMINgdaslatest}/current7days"
+fi
+
+export GESDIR=${GESDIR:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/input}
+
+if [ ! -d ${GESDIR} ]; then	
+   mkdir $GESDIR
+fi   
+mkdir -m 775 -p $COMOUT
+ 
+env
+
+########################################################
+# Execute the script.
+########################################################
+##
+## create siteid in "###", e.g., 000-999.
+## assume max site = 1000
+##
+workid=()
+let i=0
+
+export num_sites=`cat $COMIN/latlons | awk -F':' 'NR ==5 { print $2 }'`
+#export num_sites=$(echo `cat latlons | awk -F':' 'NR ==5 { print $2 }'` | tr -d ' ')
+#
+while [ ${i} -lt ${num_sites} ]; do
+   chrid=`printf %3.3d ${i}`
+   workid[${i}]=${chrid}
+   ((i++))
+done
+
+for (( j=0; j<${num_sites}; j+=1 )); do
+   mod=`printf %3.3d ${j}`
+   efile=${COMOUT}/cdump.$mod
+   if test -f $efile; then
+       echo $efile 'has been created, do nothing'
+   else
+       ${HOMEhysplit}/scripts/exhysplit_ctbto_fcst.sh  $mod
+       export err=$?; err_chk      
+   fi
+
+done
+
+#rename the cdump files, so they will be consistent with latlon.master
+for (( i=$((j-1)); i>=0; i-=1 )); do
+         mod1=`printf %3.3d ${i}`
+         mod2=`printf %3.3d $((mod1+1))`
+        mv $COMOUT/cdump.$mod1 $COMOUT/cdump.$mod2
+done
+
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+ 
+msg="$job completed normally"
+postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+date -u
