@@ -1,0 +1,168 @@
+#!/bin/bash
+
+#### UNIX Script Documentation Block
+# Script Name:  JHYSPLIT_ONDEMAND_RSMC_TCM_PUB
+# RFC Contact:  Binyu Wang, EMC
+# Aug 2024, This is the main driver script for publishing RSMC plots
+#           of a hypothetical/real event. It sets processing variables
+#           and executes a script to publish plots.
+# In v9.0: "rsmc_tcm_pub.${HYSPLIT_EVENT_ID}" is generated
+#          for a hypothetical/real event by the graphical-user-interface.
+#
+# Change history:
+# 19 AUG 2024 (SYZ) - initial. 
+# 21 AUG 2024 (SYZ) - change input file name and RUN default.
+# 23 AUG 2024 (SYZ) - replace GESDIR with HYSPLIT_NOSCRUB_DIR.
+#                   - rename input filename and show its content.
+# 10 SEP 2024 (SYZ) - replace model_ver with hysplit_ver.
+# 12 SEP 2024 (SYZ) - assign additional vars from the input file.
+# 17 SEP 2024 (SYZ) - limit input file search to max depth of one.
+
+set -xa
+export PS4='$SECONDS + '
+date -u
+
+function die() {
+   echo "FATAL ERROR: $*"
+   exit 1
+}
+
+###############################################################################
+# Set environment variables
+###############################################################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-rsmcout}
+export cycle=t${cyc}z
+
+# Change to the work directory.
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+mkdir -m 775 -p ${DATA}
+cd "${DATA}"
+
+###############################################################################
+# Set variables that may change depending on ${envir}.
+###############################################################################
+this_script_dir=$(dirname -- "${BASH_SOURCE[0]}")
+envars_script=${RSMC_ENVARS_SCRIPT:-"${this_script_dir}/../util/envars_nco.sh"}
+if [[ ! -e "${envars_script}" ]]; then
+   echo "FATAL ERROR: File not found: ${envars_script} ***"
+   exit 1
+fi
+source "${envars_script}"
+
+###############################################################################
+# Read an input file in the ${HYSPLIT_NOSCRUB_DIR} directory.
+# Note that HYSPLIT_NOSCRUB_DIR is set by envars_nco.sh.
+###############################################################################
+# There should be only one input file!
+input_filename=$(find ${HYSPLIT_NOSCRUB_DIR} -maxdepth 1 -name "rsmc_${evt}_pub.[A-Z][0-9]*" -printf '%f' -quit)
+
+if [[ -z "${input_filename}" ]]; then
+   echo "FATAL ERROR: input file not found for RSMC conventional exercise"
+   echo "FATAL ERROR: use RSMC graphical user interface to start exercise"
+   exit 1
+fi
+
+# Rename it so that the same file is not picked up by other run.
+cp  "${HYSPLIT_NOSCRUB_DIR}/${input_filename}" "${HYSPLIT_NOSCRUB_DIR}/proc.${input_filename}"
+input_filename="${HYSPLIT_NOSCRUB_DIR}/proc.${input_filename}"
+
+echo "=== showing content of ${input_filename} ==="
+cat "${input_filename}"
+echo "=== end of ${input_filename} ==="
+
+declare -a lines;
+k=0
+while read -r line; do
+   lines[$k]="${line}"
+   let k=$k+1
+done < "${input_filename}"
+
+# Delete the input file for next run.
+rm -f "${input_filename}"
+
+export HYSPLIT_EVENT_ID=${lines[0]}
+export HYSPLIT_CONF_PATHNAME=${lines[1]}
+export HYSPLIT_PDY=${lines[2]}
+export HYSPLIT_CYC=${lines[3]}
+export HYSPLIT_EVENT_PATHNAME=${lines[4]}
+export HYSPLIT_DRY_RUN=${lines[5]}  # 1/0
+export HYSPLIT_DEBUG=${lines[6]}  # 1/0
+export HYSPLIT_EMS_STIME=${lines[7]}
+export HYSPLIT_EVENT_TYPE=${lines[8]}
+export HYSPLIT_UNIT_EMS_STIME=${lines[9]}
+export HYSPLIT_EVENT_TCM_DIR=${lines[10]}
+export HYSPLIT_PUB_DIR=${lines[11]}
+export HYSPLIT_PUB_UNAVAIL=${lines[12]}  # YES/NO
+export HYSPLIT_EVENT_SITE=${lines[13]}
+export HYSPLIT_EVENT_SEQ=${lines[14]}  # 3-digit number, e.g., 001.
+export HYSPLIT_LED_BY_US=${lines[15]}  # YES/NO
+
+ecflow_client --label EVENT_ID "$HYSPLIT_EVENT_ID"
+ecflow_client --label EVENT_SITE "$HYSPLIT_EVENT_SITE"
+
+# override variables defined by the job card.
+export PDY=${HYSPLIT_PDY}
+export CYC=${HYSPLIT_CYC}
+export cyc=${HYSPLIT_CYC}
+export cycle="t${cyc}z"
+export jobid=${job}.${HYSPLIT_PDY}.${HYSPLIT_EVENT_ID}.${PBS_JOBID}
+
+export USHhysplit=${USHhysplit:-${HOMEhysplit}/ush}
+export EXEChysplit=${EXEChysplit:-${HOMEhysplit}/exec}
+export PARMhysplit=${PARMhysplit:-${HOMEhysplit}/parm}
+export FIXhysplit=${FIXhysplit:-${HOMEhysplit}/fix}
+
+setpdy.sh
+. ./PDY
+
+# $COMIN and $COMOUT both refer to the HYSPLIT output directory
+# as /lfs/h1/ops/prod/com/hysplit/${hysplit_ver}/hysplit.YYYYMMDD
+export COMIN=${COMIN:-$(compath.py ${envir}/${NET}/${hysplit_ver})/rsmctcm}
+export COMOUT=${COMOUT:-$(compath.py -o ${NET}/${hysplit_ver})/rsmcout.${PDY}}
+
+export COMOUTRUS=${COMOUTRUS:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/restrict/US}
+export COMOUTRJNT=${COMOUTRJNT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/restrict/JNT_STMT}
+#export HYSPLIT_OUT_DIR="${COMOUT}/rsmcpub.%Y%m%d"
+
+[[ -d "${COMOUT}" ]] || mkdir -m 775 -p "${COMOUT}"
+[[ -d "${COMOUTUS}" ]] || mkdir -m 775 -p "${COMOUTRUS}"
+[[ -d "${COMOUTJNT}" ]] || mkdir -m 775 -p "${COMOUTRJNT}"
+
+###############################################################################
+# Create the work directory.
+###############################################################################
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+mkdir -m 775 -p "${COMOUT}"
+
+# print all env vars
+env
+
+###############################################################################
+# Execute the script.
+###############################################################################
+
+${HOMEhysplit}/scripts/exhysplit_ondemand_rsmc_${evt}_pub.sh
+
+export err=$?; err_chk
+
+# Delete the input file for next run.
+rm -f "${input_filename}"
+rm "$(echo ${input_filename} | sed 's/proc\.//')"
+
+msg="$job completed normally"
+postmsg "$msg"
+
+###############################################################################
+# Remove the Temporary working directory
+###############################################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u

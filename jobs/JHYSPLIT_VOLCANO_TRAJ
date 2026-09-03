@@ -1,0 +1,106 @@
+#!/bin/ksh
+
+date
+export PS4=' $SECONDS + '
+set -xa
+
+# ****************************************************************
+# JHYSPLIT_CANNED_TRAJ
+#
+# Job script for hysplit trajectories
+# Only difference between NAMAK and GFS version is the
+#   command line parameter in the ex-script
+#
+# This job inputs hysplit.t${cyc}z.gfs0p5f
+# 
+# Stunder 31 Jan 2005 - 
+#         08 May 2006 - revised from dispersion to trajectories
+#         05 Feb 2015 - for NCO, turn off NAM option, force gfs0p5 instead of gfs
+# ****************************************************************
+
+# for test run of only 1 site set TEST=1, else TEST=0
+export TEST=0
+
+####################################
+# Specify NET and RUN
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-traj}
+export cyc=${cyc:-00}
+
+###############################################################
+# obtain unique process id (pid) and make temp directory
+###############################################################
+export pid=${pid:-$$}
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+# PATH for working directory
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p $DATA
+cd $DATA
+
+export SENDCOM=${SENDCOM:-YES}
+export SENDDBN=${SENDDBN:-YES}
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+export cycle=${cycle:-t${cyc}z}
+setpdy.sh
+. PDY
+
+###################################
+# directories
+###################################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-${HOMEhysplit}/exec}
+export USHhysplit=${USHhysplit:-${HOMEhysplit}/ush}
+export FIXhysplit=${FIXhysplit:-$HOMEhysplit/fix}
+
+export COMINROOT=${COMINROOT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})}
+export COMIN=${COMIN:-$(compath.py ${NET}/${hysplit_ver})}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+if [ "${SENDCOM}" = "YES" ]; then
+   mkdir -m 775 -p $COMOUT
+fi
+
+env
+
+########################################################
+# Execute the script. 
+########################################################
+${HOMEhysplit}/scripts/exhysplit_volcano_traj.sh gfs0p25
+export err=$?; err_chk
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+ 
+msg="$job completed normally"
+postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u
+
+exit

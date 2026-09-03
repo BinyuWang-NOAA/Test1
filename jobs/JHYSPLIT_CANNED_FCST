@@ -1,0 +1,138 @@
+#!/bin/sh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_FCST_CANNED_HLS
+# RFC Contact:	Binyu Wang EMC
+# Author:	NCO
+# Abstract:     This is the main driver script for the SDM "canned" HYSPLIT runs,
+#                   (NWS Weather Forecast Office/homeland security (hls))
+#               Runs for a series of starting locations given in fix file.
+#               Runs both forecast and post-processing.
+#
+# Script History Log:
+#
+# Usage:       
+#
+#  Script Parameters:
+#
+#  Modules and Files referenced:
+#
+#    scripts: script/exhysplit_fcst_canned_hls.sh
+#
+#    parms:          
+#
+#    fix:               
+#
+#    executables:       
+#
+#    output file:  
+#
+# Condition codes:
+#
+# User controllable options:
+#
+# Attributes:
+#     Language:  Linux   
+#     Machine:   WCOSS
+#
+####
+
+set -xa
+export PS4='$SECONDS + '
+date
+
+####################################
+# Specify NET and RUN
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-canned_wfo}
+
+# ###################################
+# obtain unique process id (pid) and make temp directory
+# ###################################
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+cd ${DATA}
+
+export SENDECF=${SENDECF:-YES}
+export SENDCOM=${SENDCOM:-YES}
+export SENDDBN=${SENDDBN:-YES}
+
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-${HOMEhysplit}/exec}
+export FIXhysplit=${FIXhysplit:-${HOMEhysplit}/fix}
+export USHhysplit=${USHhysplit:-${HOMEhysplit}/ush}
+
+export TASKS=${TASKS:-${NCPUS}}
+
+msg="JOB ${job} HAS BEGUN"
+echo ${msg}
+
+if [ "${SENDCOM}" != "YES" ] ; then
+    echo "SENDCOM = NO, so will set SENDWEB to NO too"
+export SENDDBN=NO
+
+fi
+
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+export cycle=t${cyc}z
+setpdy.sh
+. PDY
+export COMIN_post=${COMIN:-$(compath.py ${NET}/${hysplit_ver})/${RUN}.${PDY}}
+
+
+
+export COMIN=${COMIN:-$(compath.py ${NET}/${hysplit_ver})/${NET}.${PDY}}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMOUTwfo=$COMOUT
+export WFO_FCST_IN=${WFO_FCST_IN:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})}
+mkdir -m 775 -p ${COMOUT}
+env
+
+########################################################
+# Execute the script.
+########################################################
+${HOMEhysplit}/scripts/exhysplit_canned_fcst.sh
+export err=$?; err_chk
+
+
+export COMIN=$COMIN_post
+export run_type=${run_type:-canned}
+
+${HOMEhysplit}/scripts/exhysplit_canned_post.sh
+export err=$?; err_chk
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+
+msg="${job} completed normally"
+echo ${msg}
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "${KEEPDATA}" != "YES" ] ; then
+  cd ${DATAROOT}
+ rm -rf ${DATA}
+fi
+
+date -u

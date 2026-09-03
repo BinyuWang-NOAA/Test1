@@ -1,0 +1,150 @@
+#!/bin/ksh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_FCST
+# RFC Contact:  Binyu Wang, EMC
+# Author:       Barbara Stunder, NOAA OAR Air Resources Laboratory
+# Abstract:     This is the pre-driver script for the HYSPLIT FCST to check the
+#               data existing and producing MPMD CPU mapping for station processing.
+#
+# Script History Log:
+#  2017 FEB 28 - created (HCH)
+#  2017 FEB 28 - modified for mpmd processing (HCH)
+#  2019 SEP 04 - for Dell (Phase 3)
+
+###################################
+# CHEKC REQUEST EMAIL AND PROCESS
+###################################
+
+set -xa
+export PS4='$SECONDS + '
+date -u
+
+####################################
+# Specify NET and RUN
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-ctbto}
+
+############################################
+# obtain unique process id (pid) and make temp directories
+############################################
+
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+cd ${DATA}
+
+####################################
+export org=${org:-sdm}
+
+####################################
+# Path to HOME Directory
+####################################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-$HOMEhysplit/exec}
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+export cycle=${cycle:-t${cyc}z}
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+setpdy.sh
+. PDY
+
+export YR=`echo $PDY | cut -c1-4`
+export MN=`echo $PDY | cut -c5-6`
+export DD=`echo $PDY | cut -c7-8`
+export HH=$cyc
+export HHprev=`${NDATE} -1 $ndate | cut -c9-10`
+
+if [ $MN = '01' ] ; then
+ let "MNm1=12"
+ let "YRm1=YR-1"
+else
+ let "MNm1=MN-1"
+ let "YRm1=YR"
+fi
+
+typeset -Z2 MN MNm1 DD  HH
+typeset -Z4 YR YRm1 
+
+export CTBTO_JOB_LIST="jhysplit_ctbto_fcst jhysplit_ctbto_post jhysplit_ctbto_archive"
+
+export GESDIR=${GESDIR:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/input}
+export COMIN=${COMIN:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export DCOM=${DCOM:-${DCOMROOT}/ctbto}
+export COMSTAMP=${COMSTAMP:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/timestamps}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMINgdas=${COMINgdas:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.${YR}${MN}}
+export COMINgdasm1=${COMINgdasm1:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.${YRm1}${MNm1}}
+
+if [ ! -d ${GESDIR} ]; then
+   mkdir $GESDIR
+fi
+
+##
+## Locate the current7days files in new gdas file structure
+## If SDM run retro case of 2015103013 on 20151112, one can not
+## find current7days in ${COMINgdas}, i.e., $(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.201510.
+## "current7days" is always placed in the gdas.${current_month},
+## i.e., $(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.201511
+##
+TDYHH=$($NDATE)
+TDYmonth=`echo ${TDYHH} | cut -c1-6`
+export COMINgdaslatest=${COMINgdaslatest:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/gdas.${TDYmonth}}
+if [ ! -e ${COMINgdaslatest}/current7days ]; then
+   echo "WARNING WARNING can not find ${COMINgdaslatest}/current7days"
+fi
+
+if [ ! -d $COMSTAMP ]; then
+   mkdir -p $COMSTAMP
+fi
+
+if [ ! -d $COMOUT ]; then
+   mkdir -p $COMOUT
+fi
+
+
+# Create a stamp file to handle running across 2 cycles
+echo $PDY$cyc > $COMSTAMP/ctbto_hysplit.stamp
+
+########################################################
+# Execute the script.
+########################################################
+${HOMEhysplit}/scripts/exhysplit_ctbto_request_chk.sh
+export err=$?; err_chk
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+ 
+msg="$job completed normally"
+postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u

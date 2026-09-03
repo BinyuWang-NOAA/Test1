@@ -1,0 +1,129 @@
+#!/bin/ksh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_DUST_FCST
+# RFC Contact:  Binyu Wang EMC
+# Author:       ARL
+# Abstract:     This is the main driver script for HYSPLIT dust forecast
+#
+# Script History Log:
+#
+# Usage:       
+#
+#  Script Parameters:
+#
+#  Modules and Files referenced:
+#
+#    scripts: scripts/exhysplit_dust_fcst.sh
+#
+# Attributes:
+#     Language:  Linux   
+#     Machine:   WCOSS
+#
+####
+
+set -xa
+export PS4='$SECONDS + '
+date -u
+
+####################################
+# Setup directories and common environment variable
+export NET=${NET:-hysplit}
+export RUN=${RUN:-dustcs}
+export runid=${runid:-dustcs}
+export cycle=${cycle:-t${cyc}z}
+
+####################################
+# obtain unique process id (pid) and make temp directory
+####################################
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+cd ${DATA}
+
+####################################
+# SENDECF  - Flag Events on ECF 
+# SENDCOM  - Copy Files From TMPDIR to ${COMOUT}
+# SENDDBN  - Issue DBNet Client Calls
+####################################
+export SENDECF=${SENDECF:-YES}
+export SENDCOM=${SENDCOM:-YES}
+export SENDDBN_PCOM=${SENDDBN_PCOM:-YES}
+
+export DBNALERT_TYPE_PCOM=${DBNALERT_TYPE_PCOM:-GRIB_HIGH}
+
+####################################
+# Specify Execution Areas
+####################################
+
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-${HOMEhysplit}/exec}
+export PARMhysplit=${PARMhysplit:-${HOMEhysplit}/parm}
+export FIXhysplit=${FIXhysplit:-${HOMEhysplit}/fix}
+export USHhysplit=${USHhysplit:-${HOMEhysplit}/ush}
+export UTILhysplit=${UTILhysplit:-${HOMEhysplit}/util}
+
+msg="JOB ${job} HAS BEGUN"
+echo ${msg}
+
+##############################
+# Run setpdy and initialize PDY variables
+##############################
+setpdy.sh
+. PDY
+
+##############################################
+# Define COM directories
+##############################################
+export COMIN=${COMIN:-$(compath.py ${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMINm1=${COMINm1:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDYm1}}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export pcom=${pcom:-${COMOUT}/wmo}
+
+export COMINHYSPT=${COMINHYSPT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${NET}.${PDY}}
+export MET=${MET:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${NET}.${PDY}/}
+
+env
+
+mkdir -m 775 -p ${COMOUT} ${pcom}
+
+
+#############################################################
+# execute the script
+#############################################################
+sh ${HOMEhysplit}/scripts/exhysplit_dust_fcst.sh
+err=$?; err_chk
+
+echo "CONUS dust Forecast Completed Normally."
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+
+msg="${job} completed normally"
+echo ${msg}
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "${KEEPDATA}" != "YES" ] ; then
+  cd ${DATAROOT}
+  rm -rf ${DATA}
+fi
+
+date -u
