@@ -1,0 +1,120 @@
+#!/bin/bash
+
+#### UNIX Script Documentation Block
+# Script Name:  JHYSPLIT_RSMC_TCM_CRON
+# RFC Contact:  Binyu Wang, EMC
+# Aug 2024, This is the main driver script for running all hypothetical/real
+#           events. It sets processing variables and executes a script to run
+#           HYSPLIT simulation and generate plots.
+#
+# Change history:
+# 19 AUG 2024 (SYZ) - initial. 
+# 21 AUG 2024 (SYZ) - change RUN default.
+# 23 AUG 2024 (SYZ) - replace GESDIR with HYSPLIT_NOSCRUB_DIR.
+# 10 SEP 2024 (SYZ) - replace model_ver with hysplit_ver.
+# 12 SEP 2024 (SYZ) - assign additional vars from the input file.
+
+set -xa
+export PS4='$SECONDS + '
+date -u
+
+###############################################################################
+# Set environment variables
+###############################################################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-rsmc}
+export cycle="t${cyc}z"
+
+# Change to the work directory.
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+mkdir -m 775 -p ${DATA}
+cd "${DATA}"
+
+# Set the production date, ${PDY}.
+# The $DATA job directory must be set before running setpdy.sh.
+setpdy.sh
+. ./PDY
+
+export USHhysplit=${USHhysplit:-${HOMEhysplit}/ush}
+export EXEChysplit=${EXEChysplit:-${HOMEhysplit}/exec}
+export PARMhysplit=${PARMhysplit:-${HOMEhysplit}/parm}
+export FIXhysplit=${FIXhysplit:-${HOMEhysplit}/fix}
+
+# $COMIN and $COMOUT both refer to the HYSPLIT output directory
+# as /lfs/h1/ops/prod/com/hysplit/${hysplit_ver}/hysplit.YYYYMMDD
+export COMIN=${COMIN:-$(compath.py ${envir}/${NET}/${hysplit_ver})}
+export COMOUT=${COMOUT:-$(compath.py -o ${NET}/${hysplit_ver})/rsmcout.${PDY}}
+#export HYSPLIT_NOSCRUB_DIR=${COMIN}/rsmctcm
+#export HYSPLIT_OUT_DIR="${COMOUT}/rsmcout.%Y%m%d.%H"
+
+[[ -d "${COMOUT}" ]] || mkdir -m 775 -p "${COMOUT}"
+
+###############################################################################
+# Set variables that may change depending on ${envir}.
+###############################################################################
+this_script_dir=$(dirname -- "${BASH_SOURCE[0]}")
+envars_script=${RSMC_ENVARS_SCRIPT:-"${this_script_dir}/../util/envars_nco.sh"}
+if [[ ! -e "${envars_script}" ]]; then
+   echo "FATAL ERROR: File not found: ${envars_script} ***"
+   exit 1
+fi
+source "${envars_script}"
+
+external_conf="${HYSPLIT_NOSCRUB_DIR}/runtcm.json"
+
+# Specify the filename of the configuration template
+template_conf="${RSMC_CONFIG_TMPL:-${HOMEhysplit}/fix/hysplit_runtcm.json}"
+
+# Create the configuration file even if it may already exist. This is because
+# some variables used by the configuration template might have changed.
+external_conf_lock="${external_conf}.lock"
+
+# Open the lock file using file descriptor 7 and lock on the file descriptor.
+# File descriptors 0, 1, and 2 are already open. 7 is safe to use.
+exec 7> ${external_conf_lock}
+flock --timeout 30 -x 7 || {
+   echo "FATAL ERROR: Cannot lock ${external_conf_lock}"
+   exit 1
+}
+
+echo "INFO: Creating external configuration file from template ${template_conf} ***"
+eval "cat > $external_conf <<EOF
+$(< ${template_conf})
+EOF
+"
+
+# Unlock and close the file descriptor.
+flock -u 7
+exec 7>&-
+
+
+HYSPLIT_CONF_PATHNAME="${external_conf}"
+
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+# print all env vars
+env
+
+###############################################################################
+# Execute the script.
+###############################################################################
+
+${HOMEhysplit}/scripts/exhysplit_${ondemand}rsmc_tcm_prep.sh
+export err=$?; err_chk
+
+msg="$job completed normally"
+postmsg "$msg"
+
+###############################################################################
+# Remove the Temporary working directory
+###############################################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u

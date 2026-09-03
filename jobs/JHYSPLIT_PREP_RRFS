@@ -1,0 +1,172 @@
+#!/bin/ksh
+
+set -xa
+export PS4='$SECONDS + '						
+date -u	
+
+# #### 08/25/25 #######################################
+#
+#       JHYSPLIT_PREP_RRFS
+#
+# SET HYSPLIT PROCESSING VARIABLES FOR RRFS, including NA,COUNS,AK,PR,HI,FIREWX)
+# Modules and Files referenced:
+# scripts: scripts/exhysplit_prep.sh, exhysplit_prep_rrfs_nat.sh
+#
+# 08-25-2025 Created from JHYSPLIT_NAM12K_PREP
+# #####################################################
+
+# Setup directories and common environment variable
+export NET=${NET:-hysplit}
+export model=${model:-hysplit}
+export RUN=${RUN:-hysplit}
+
+####################################
+# Forecast details - RRFS
+####################################
+export FHR_START=${FHR_START:-0}	# start forecast hour 
+export FHR_MAX=${FHR_MAX:-49}      # (18) # max forecast hour # 0 to not create forecast
+export FHR_INT=${FHR_INT:-1}	# forecast hour interval
+export CYC_INT="06"     # cycle interval (hours) (changes needed in exhysplit_prep.sh for CYC_INT=1)
+export LEN_ARC=${LEN_ARC:-0}        # (1) length of archive (days)
+ # NOTE: my non-poe job gives 23-h A file correctly
+ #       but ops poe job is only an 11-h file because it's 4 tasks
+export mdl=rrfs
+export mdl_ver=${rrfs_ver}
+export mdl2=firewx        	# for firewx
+export mem=  		# sref member
+export mdlcom=${mdl}
+#export mdlcomsfx=".grib2" 
+export mdlcomsfx=${mdlcomsfx:-.grib2}
+export mdlday=${mdl}
+export jname9=rrfs
+export domain=${domain:-conus}  # predefined in ecf script
+export hswitch=${hswitch:-1}
+export prefix=${prefix:-rrfs}
+export MDL=RRFS
+#export fname=prslev.3km
+export fname=${fname:-prslev.3km}  #  predefined in ecf script
+export sfx=
+export convert="rrfs2arl"  	# program to convert to HYSPLIT (ARL) format
+export dashi="-i"
+export dashg=     	# grid, gfs defaults to g3=global
+                        #       wrf defaults to aqm
+export dashp=    	# precipitation, 
+                        #    wrf default is difference, else previous
+                        #      because of 3-h accum for 06z and 18z cycles
+                        #      but 12-h precip accumulation for 00z and 12z
+                        #    gfs, null
+export dashs=           # supplemental grib file, optional for conus; others null
+export dashv=     	#vertical resolution,
+                        #    wrf, default to cmaq (2=<700mb, 3=full)
+                        #    others, null
+export dashx=           #extract
+                        #    wrf, default to 3-d, 2 for 2-d only
+                        #    others, null
+export dashz="-z"     	# initialization flag,
+                        #    gfs (z0=do not initialize)
+                        #    others, null
+export loop=1     	# per hypslit_prep_arch.sh 
+                        #    wrf, 0
+                        #    others, 1
+
+########################################################## 
+# obtain unique process id (pid) and make temp directory
+########################################################## 
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+cd ${DATA}
+
+########################################################## 
+
+export cycle=${cycle:-t${cyc}z}
+
+####################################
+# SENDECF  - Flag Events on ECF 
+# SENDCOM  - Copy Files From TMPDIR to $com 
+# SENDDBN  - 
+####################################
+export SENDECF=${SENDECF:-YES}
+export SENDCOM=${SENDCOM:-YES}
+export SENDDBN=${SENDDBN:-YES}
+
+####################################
+# parallel vars
+####################################
+export TASKS=${TASKS:-${NCPUS}}
+export MPMD=on
+export MP_LABELIO=YES
+
+####################################
+# Specify Execution Areas
+####################################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-$HOMEhysplit/exec}
+export USHhysplit=${USHhysplit:-$HOMEhysplit/ush}
+export FIXhysplit=${FIXhysplit:-$HOMEhysplit/fix}
+export PARMhysplit=${PARMhysplit:-$HOMEhysplit/parm}
+#export JOBShysplit=${JOBShysplit:-$HOMEhysplit/jobs}
+
+msg="JOB ${job} HAS BEGUN"
+echo ${msg}
+
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+setpdy.sh
+. PDY
+
+####################################
+# Set Directories Where Model Input is Located
+####################################
+export COMMDLIN=${COMMDLIN:-$(compath.py ${envir}/com/${mdl}/${mdl_ver})}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${NET}.${PDY}}
+mkdir -m 775 -p ${COMOUT}
+export COMOUT_HYSPT=$COMOUT
+ 
+env
+
+########################################################
+# Execute the script.
+#######################################################
+if [ "${domain}" = "na" -o "${domain}" = "ak" ];then	
+#using RRFS pressure files as input
+  ${HOMEhysplit}/scripts/exhysplit_prep.sh
+else 
+#using RRFS native files as input	
+  ${HOMEhysplit}/scripts/exhysplit_prep_rrfs_nat.sh
+fi  
+export err=$?; err_chk
+
+echo "Hysplit Prep ${domain} Completed Normally."
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+
+msg="${job} completed normally"
+echo ${msg}
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "${KEEPDATA}" != "YES" ] ; then
+  cd ${DATAROOT}
+  rm -rf ${DATA}
+fi
+
+date -u

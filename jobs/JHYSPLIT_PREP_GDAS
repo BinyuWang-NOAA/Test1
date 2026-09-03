@@ -1,0 +1,217 @@
+#!/bin/ksh
+
+set -xa
+export PS4='$SECONDS + '						
+date -u	
+# #################################################
+#JHYSPLIT_PREP_GDAS
+#RFC Contact:  Binyu Wang EMC
+#This is the driver script to convert GDAS grib2 to ARL format
+# #####################################################
+
+####################################
+# Specify NET Name and model
+#
+# model - model grib field to repack
+####################################
+export NET=${NET:-hysplit}
+export model=${model:-hysplit}
+export RUN=${RUN:-hysplit}
+####################################
+# Forecast/Archive details - gdas
+####################################
+# see ush script for sref filename
+export FHR_START=0	# start forecast hour 
+export FHR_MAX=9 	# (9) (6 for testing)	# max forecast hour
+export FHR_INT=3	# forecast hour interval
+export CYC_INT="06"     # cycle interval (hours)
+export LEN_ARC=0        # (2) length of archive (days)	
+export mdl=gfs
+export mdl_ver=${gfs_ver}
+export mdl2=            # for sref
+export mem=  		# sref member
+export mdlcom=gdas
+export mdlday=gdas
+export jname9=gdas
+export domain=null      
+export prefix=${mdlcom}
+export MDL=GDAS
+export fname=pgrb2.1p00.f
+export sfx=
+export convert="gdas2arl_g2"  	# program to convert to HYSPLIT (ARL) format
+export dashi="-i"	# input, for gfs and wrf
+                        #        nam, null
+export dashg="-g3"	# grid, gfs defaults to g3=global
+                        #       wrf defaults to aqm
+export dashp=    	# precipitation, 
+                        #    wrf default is difference, else previous
+                        #      because of 3-h accum for 06z and 18z cycles
+                        #      but 12-h precip accumulation for 00z and 12z
+                        #    gfs, null
+export dashs=           # supplemental grib file, optional for wrf; others null
+export dashv=     	#vertical resolution,
+                        #    wrf, default to cmaq (2=<700mb, 3=full)
+                        #    others, null
+export dashx=           #extract
+                        #    wrf, default to 3-d, 2 for 2-d only
+                        #    others, null
+export dashz="-z" 	# initialization flag,
+                        #    gfs (z0=do not initialize)
+                        #    others, null
+export loop=1     	# per hypslit_prep_arch.sh 
+                        #    wrf, 0
+                        #    others, 1
+export COLDSTART=${COLDSTART:-"NO"}
+# -------------------------------------------------
+# these have to do with the gdas weekly file; see scripts/exhysplit_prep.sh
+# -------------------------------------------------
+# when do a prod/dev switch, it is assumed the files in $COMOUTgdas are identical before
+#    start running on new machine, or else normal operations will likely fail because of missings
+#  if start from scratch with $COMOUTgdas being empty,
+#    run below step 1 and step 2 for given cycle, then run step 3 for next cycle
+#  if start from scratch other than 00z on these dates of month,
+#    will have missings for time periods before the starting date/cycle,
+#    unless force previous PDY to fill them in
+#  generally it is better to copy files rather than a start from scratch
+# -------------------------------------------------
+# start from scratch step 1 of 3  - 1st cycle (initialize current GDAS.n)
+#export INITIALIZE_NEXT=${INITIALIZE_NEXT:-NO}     # do not need to initialize next weekly (GDAS.n+1)
+#export INITIALIZE_ONLY=${INITIALIZE_ONLY:-YES}    # initialize file for the cycle run (GDAS.n)
+#export SKIP_PRECHECK=${SKIP_PRECHECK:-YES}      # there is no prior cycle to test
+# -------------------------------------------------
+# start from scratch step 2 of 3, to be run immediately after step 1 of 3 - 1st cycle (write to GDAS.n)
+#export INITIALIZE_NEXT=${INITIALIZE_NEXT:-YES}    # initialize next weekly (GDAS.n+1)
+#export INITIALIZE_ONLY=${INITIALIZE_ONLY-NO}     # do not initialize file that is currently being written to (GDAS.n)
+#export SKIP_PRECHECK=${SKIP_PRECHECK:-YES}      # there is no prior cycle to test
+# -------------------------------------------------
+# start from scratch step 3 of 3 - next cycle. This is also normal operations.
+export INITIALIZE_NEXT=${INITIALIZE_NEXT:-YES}    # initialize next weekly (GDAS.n+1)
+export INITIALIZE_ONLY=${INITIALIZE_ONLY:-NO}     # do not initialize file that is currently being written to (GDAS.n)
+export SKIP_PRECHECK=${SKIP_PRECHECK:-NO}       # there is a prior cycle to test; do not skip
+# -------------------------------------------------
+
+# cannot do both INITIALIZE_NEXT and INITIALIZE_ONLY, script only does 1 initialization
+if [ "${INITIALIZE_NEXT}" = "YES" -a "${INITIALIZE_ONLY}" = "YES" ]
+then
+  msg="FATAL ERROR - cannot have both INITIALIZE_NEXT and INITIALIZE_ONLY being YES"
+  postmsg "$msg"
+fi
+
+########################################################## 
+# obtain unique process id (pid) and make temp directory
+########################################################## 
+export pid=$$
+
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+cd ${DATA}
+
+####################################
+
+export cycle=${cycle:-t${cyc}z}
+
+####################################
+# SENDECF  - Flag Events on ECF 
+# SENDCOM  - Copy Files From TMPDIR to $com 
+# SENDDBN  - 
+####################################
+export SENDECF=${SENDECF:-YES}
+export SENDCOM=${SENDCOM:-YES}
+export SENDDBN=${SENDDBN:-YES}
+
+####################################
+# parallel vars
+####################################
+export TASKS=${TASKS:-${NCPUS}}
+export MPMD=on
+export MP_LABELIO=YES
+
+####################################
+# Specify Execution Areas
+####################################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-$HOMEhysplit/exec}
+export USHhysplit=${USHhysplit:-$HOMEhysplit/ush}
+export FIXhysplit=${FIXhysplit:-$HOMEhysplit/fix}
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+setpdy.sh
+. PDY
+
+####################################
+# Set Directories Where Model Input is Located
+####################################
+export COMIN=${COMIN:-$(compath.py ${model}/${hysplit_ver})/${NET}.${PDY}}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${model}/${hysplit_ver})/${NET}.${PDY}}
+mkdir -m 775 -p $COMOUT
+export COMOUT_HYSPT=${COMOUT}
+export COMMDLIN=${COMMDLIN:-$(compath.py ${envir}/com/${mdl}/${mdl_ver})}
+export COMINhysplit=${COMINhysplit:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${NET}.${PDY}}
+
+# force all files in a month to be written to $year$month01 directory
+#   NCO will then be able to more readily automate the cleanup so
+#   always have current and past months
+year=`echo ${PDY} | cut -c1-4`
+month=`echo ${PDY} | cut -c5-6`
+export COMOUTgdas=${COMOUTgdas:-$(compath.py ${envir}/com/${model}/${hysplit_ver})/gdas.${year}${month}}
+# need previous cycle's output directory on 00z cycle 1st of month
+yearm1=`echo ${PDYm1} | cut -c1-4`
+monthm1=`echo ${PDYm1} | cut -c5-6`
+export COMOUTgdasm1=${COMOUTgdasm1:-$(compath.py ${envir}/com/${model}/${hysplit_ver})/gdas.${yearm1}${monthm1}}
+# need next cycle's output directory on 18z cycle 28th of month and to end of month
+yearp4=`echo ${PDYp4} | cut -c1-4`
+monthp4=`echo ${PDYp4} | cut -c5-6`
+export COMOUTgdasp4=${COMOUTgdasp4:-$(compath.py ${envir}/com/${model}/${hysplit_ver})/gdas.${yearp4}${monthp4}}
+
+if [ ! -d $COMOUTgdas  ]
+then
+ mkdir -m 775 -p $COMOUTgdas
+fi
+if [ ! -d $COMOUTgdasp4  ]
+then
+# normally on 1st of month 00z cycle this job will create this directory
+ mkdir -m 775 -p $COMOUTgdasp4
+fi
+
+env
+
+########################################################
+# Execute the script.
+#######################################################
+${HOMEhysplit}/scripts/exhysplit_prep.sh
+export err=$?; err_chk
+
+echo "Hysplit Prep ${MDL}${mdlcomsfx} Completed Normally."
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+ 
+msg="$job completed normally"
+postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+date -u

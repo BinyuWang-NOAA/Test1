@@ -1,0 +1,137 @@
+#!/bin/ksh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_DATACHK
+# RFC Contact:	Binyu Wang EMC
+# Author:	NCO
+# Abstract:     This is the main driver script for the SDM "on-demand" HYSPLIT runs,
+#                  (volcanic ash, radiological (Regional Specialized Meteorological Center (RSMC), 
+#                   and NWS Weather Forecast Office/homeland security (hls))
+#               Is run following the SDM running setup_hysplit_script,
+#               It is not run automatically with each cycle, but only as needed in response to
+#                an incident.
+#               Runs both JHYSPlT_FCST and JHYSPLIT_POST,
+#               Creates COMSTAMP directory for timestamp for consistency between FCST and POST
+#
+# Script History Log:
+#  1999 Jun 17 - created, including capability to choose nest of the special 4 km hires run  
+#  2002 May 23 - add test for user mgc0bs for ARL testing; please leave this for ARL testing
+#  2003 Mar 05 - frost - change ghostscript to 7.05 from 5.10
+#  2010 Apr    - restructure for multi-task version of hysplit dispersion (hysplit_hymodelm)
+#
+# Usage:       
+#
+#  Script Parameters:
+#
+#  Modules and Files referenced:
+#
+#    scripts: ush/hiresw_get_hls_nest.sh
+#             scripts/exhysplit_datachk.sh
+#
+#    parms:          
+#
+#    fix:               
+#
+#    executables:       
+#
+#    output file:  ${COMSTAMP}/ondemand_hysplit.stamp
+#
+# Condition codes:
+#
+# User controllable options:
+#
+# Attributes:
+#     Language:  Linux
+#     Machine:   NCEP WCOSS
+#
+####
+
+set -xa
+export PS4='$SECONDS + '
+date
+
+####################################
+# Specify NET and RUN
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-hysplit}
+
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export GESDIR=${GESDIR:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/input}
+
+# #### 06/17/99 #####################
+# SET HYSPLIT PROCESSING VARIABLES
+# ###################################
+export org=${org:-sdm}
+#export NEST=`${HOMEhysplit}/ush/hiresw_get_hls_nest.sh | awk '{print $1}'`
+#export PDY=`${HOMEhysplit}/ush/hiresw_get_hls_nest.sh | awk '{print $2}'`
+#export cyc=`${HOMEhysplit}/ush/hiresw_get_hls_nest.sh | awk '{print $3}'`
+#export priority=`${HOMEhysplit}/ush/hiresw_get_hls_nest.sh | awk '{print $4}'`
+
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+cd ${DATA}
+
+read NEST PDY cyc priority <<< `${HOMEhysplit}/ush/hiresw_get_hls_nest.sh`
+export cyc=12
+rm hysplit.ini									# ARL
+
+export cycle=${cycle:-t${cyc}z}
+
+###############################################################
+# obtain unique process id (pid) and make temp directory
+###############################################################
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export outid=${outid:-LL$job}
+[ ${envir} != prod ]  && export outid="LL${job}_${envir}"
+
+export jobid="${outid}.o${pid}"
+export pgmout="OUTPUT.${pid}"
+
+msg="JOB $job HAS BEGUN"
+echo ${msg}
+
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+setpdy.sh
+. ./PDY
+
+export COMIN=${COMIN:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMSTAMP=${COMSTAMP:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/timestamps}
+
+if [ ! -d ${COMSTAMP} ]; then
+   mkdir -p ${COMSTAMP}
+fi
+
+# Create a stamp file to handle running across 2 cycles
+echo $PDY$cyc > ${COMSTAMP}/ondemand_hysplit.stamp
+
+########################################################
+# Execute the script.
+########################################################
+${HOMEhysplit}/scripts/exhysplit_ondemand_datachk.sh
+export err=$?; err_chk
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+msg="$job completed normally"
+echo ${msg}
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd ${DATAROOT}
+  rm -rf ${DATA}
+fi
+date -u 

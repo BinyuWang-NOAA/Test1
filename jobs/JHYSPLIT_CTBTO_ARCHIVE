@@ -1,0 +1,127 @@
+#!/bin/ksh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_CTBTO_ARCHIVE
+# RFC Contact:  Binyu Wang EMC
+# Author:       ARL
+# Abstract:     This is the main driver script for CTBTO archive
+#
+# Script History Log:
+#
+# Usage:       
+#
+#  Script Parameters:
+#
+#  Modules and Files referenced:
+#    scripts: scripts/exhysplit_ctbto_archive.sh
+#
+# Attributes:
+#     Language:  Linux   
+#     Machine:   WCOSS
+####
+set -xa                                                                         
+export PS4='$SECONDS + '
+date
+
+if [ "$PARATEST" == YES ]; then
+  echo "No archive for parallel production test. Exitting."
+  exit
+fi
+
+####################################
+# Specify NET and RUN
+####################################
+export NET=${NET:-hysplit}
+export RUN=${RUN:-ctbto}
+
+###############################################################
+# obtain unique process id (pid) and make temp directory
+###############################################################
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export pgmout="OUTPUT.${pid}"
+
+ecfrid=$(echo ${PBS_JOBID} | awk -F"." '{print $1}')
+export job=${job:-${PBS_JOBNAME}}
+export jobid=${jobid:-${PBS_JOBNAME}.${ecfrid}}
+
+export LSB_OUTPUTFILE=${LSB_OUTPUTFILE:-${PBS_O_WORKDIR}/${PBS_JOBNAME}.o${ecfrid}}
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+export KEEPDATA=${KEEPDATA:-NO}
+mkdir -m 775 -p ${DATA}
+cd ${DATA}
+
+####################################
+# Time Variables
+####################################
+export CYC=$cyc
+export cycle=t${cyc}z
+
+######################################
+# Execute setup and setpdy
+######################################
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+setpdy.sh
+. PDY
+
+##########################
+# Script location definitions
+##########################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export USHctbto=${USHctbto:-$HOMEhysplit/ush}
+export PARMctbto=${PARMctbto:-$HOMEhysplit/parm}
+#
+# The script location of operational  ~/ush/rhist_restrict.sh
+#
+# new location definition of the utilities on WCOSS2
+export HOMErunhistory=${HOMErunhistory:-/lfs/h1/ops/${envir}/packages/runhistory.${runhistory_ver}}
+
+##########################
+# Input directories
+##########################
+export COMIN=${COMIN:-$(compath.py ${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMINPUT=${COMINPUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/input}
+
+
+#########################
+# HPSS Directory definitions
+#########################
+export HPSSOUT=${HPSSOUT:-/NCEPPROD/hpss$envir/runhistory}
+export HPSSOUT_OBS=${HPSSOUT_OBS:-/NCEPOBSERV/hpss$envir/runhistory}
+
+env
+
+#############################################################
+# execute the script
+#############################################################
+${HOMEhysplit}/scripts/exhysplit_ctbto_archive.sh
+export err=$?; err_chk
+
+if [ -s ${pgmout} ]; then
+  cat ${pgmout}
+fi
+ 
+msg="$job completed normally"
+postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u

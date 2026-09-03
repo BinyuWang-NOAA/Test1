@@ -1,0 +1,196 @@
+#!/bin/ksh
+
+#. /usrx/local/Modules/default/init/ksh
+set -xa
+export PS4='$SECONDS + '
+date -u
+
+# #### 05/22 #######################################
+#
+#       JHYSPLIT_GEFS_PREP
+# SET HYSPLIT PROCESSING VARIABLES FOR GEFS 
+#  May 2022 added GEFS convert
+# July 2024 (WBY) EXTEND the forecast period from FHR 087 to 240
+# July 2025 (WBY)add the restart capability
+# #####################################################
+
+####################################
+# Specify NET Name and model
+#
+# model - model grib field to repack
+####################################
+export NET=${NET:-hysplit}
+export model=${model:-hysplit}
+export RUN=${RUN:-hysplit}
+
+export mod_list=${mod_list:-"gec gep"}  
+export per_list1=${per_list:-"00"}
+export per_list2=${per_list:-" 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30"}
+####################################
+# Forecast/Archive details - gfsonedeg
+####################################
+export FHR_START=87                 #  start forecast hour, see below
+export FHR_MAX=${FHR_MAX:-240}      # max forecast hour
+export FHR_INT=3        # forecast hour interval
+export CYC_INT=${CYC_INT:-"06"}    # cycle interval (hours)
+export mdl=gefs
+export mdl_ver=${gefs_ver}
+export mdl2=            # for sref
+export mem=             
+export mdlcom=gefs
+export mdlday=${mdl}
+export jname9=$mdlcom
+export domain=null
+export prefix=${mdl}
+export MDL=GEFS
+export fname=pgrb2p5     # grib2 concate pgrb2ap5 and pgrb2bp5
+export sfx=
+export convert="gefs2arl"         # program to convert to HYSPLIT (ARL) format
+export dashi="-i"       # input, for gfs and wrf
+                        #        nam, null
+export dashg="-g3"      # grid, gfs defaults to g3=global
+                        #       wrf defaults to aqm
+export dashp=           # precipitation,
+                        #    wrf default is difference, else previous
+                        #      because of 3-h accum for 06z and 18z cycles
+                        #      but 12-h precip accumulation for 00z and 12z
+                        #    gfs, null
+export dashs=           # supplemental grib file, optional for wrf; others null
+export dashv=           #vertical resolution,
+                        #  wrf, default to cmaq (2=<700mb, 3=full)
+                        #    others, null
+export dashx=           #extract
+                        #    wrf, default to 3-d, 2 for 2-d only
+                        #    others, null
+export dashz="-z"       # initialization flag,
+                        #    gfs (z0=do not initialize)
+                        #    others, null
+export loop=1           # per hypslit_prep_arch.sh
+                        #    wrf, 0
+                        #    others, 1
+
+##########################################################
+# obtain unique process id (pid) and make temp directory
+##########################################################
+# PATH for working directory
+export pid=$$
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/${envir}/tmp}
+
+export DATAtmp=${DATAROOT}/setpdy/gefs.$$
+if [ ! -d ${DATAtmp} ]
+then
+     mkdir -p ${DATAtmp}
+fi
+cd ${DATAtmp}
+
+####################################
+
+export cycle=${cycle:-t${cyc}z}
+
+####################################
+# SENDECF  - Flag Events on ECF
+# SENDCOM  - Copy Files From TMPDIR to $com
+# SENDDBN  -
+####################################
+export SENDECF=${SENDECF:-YES}
+export SENDCOM=${SENDCOM:-YES}
+export SENDDBN=${SENDDBN:-YES}
+
+####################################
+# parallel vars
+####################################
+export TASKS=${TASKS:-${NCPUS}}
+export MPMD=on
+export MP_LABELIO=YES
+
+####################################
+# Specify Execution Areas
+####################################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export EXEChysplit=${EXEChysplit:-$HOMEhysplit/exec}
+export USHhysplit=${USHhysplit:-$HOMEhysplit/ush}
+export FIXhysplit=${FIXhysplit:-$HOMEhysplit/fix}
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+setpdy.sh
+. PDY
+
+####################################
+# Set Directories Where Model Input and output is Located
+####################################
+# JY - this is for gefs input and output
+export COMMDLIN=${COMMDLIN:-$(compath.py ${envir}/com/${mdl}/${mdl_ver})}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${NET}.${PDY}}
+mkdir -m 775 -p ${COMOUT}
+export COMOUT_HYSPT=${COMOUT_HYSPT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${NET}.${PDY}}
+env
+
+########################################################
+# Execute the script.
+#######################################################
+for mod in ${mod_list}
+do
+##########For gec00 and gep00-30########
+ if [ "${mod}" = "gec" ];then
+   export per_list=${per_list1}
+   echo "perlist1 is "$per_list
+ else
+   export per_list=${per_list2}
+   echo "perlist2 is "$per_list
+ fi
+
+ for per in ${per_list}
+ do
+   export mod=${mod}
+   export per=${per}
+   export job=hyspt_prep_${mdl}_${mod}.${per}.${PDY}
+
+####################################
+# Determine Job Output Name on System
+####################################
+
+  export outid="LL$job"
+  export jobid="${outid}.o${pid}"
+  export pgmout="OUTPUT.${pid}"
+  export DATA=${DATAROOT}/${jobid}
+  #-- this should be in jobs, scripts, ush, etc.
+  if [ ! -d ${DATA} ]
+  then
+    mkdir -p ${DATA}
+  fi
+#######test if file is generated or not############
+
+  hf=${COMOUT}/hysplit.t${cyc}z.${mdl}mrf.${mod}${per}
+  filesize=$(wc -c < "$hf")
+  if [[ -f "$hf" ]] && (( filesize == 2122395080 )); then
+       echo $hf 'has been created, do nothing'
+  else
+    ${HOMEhysplit}/scripts/exhysplit_prep_ensemble.sh 
+    export err=$?; err_chk
+    echo "Hysplit Prep ${MDL}${mdlcomsfx} Completed Normally."
+  fi
+
+ if [ -s ${pgmout} ]; then
+    cat $pgmout
+ fi
+
+ msg="$job completed normally"
+ postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+ if [ "$KEEPDATA" != "YES" ] ; then
+   cd $DATAROOT
+   rm -rf $DATA
+ fi
+ 
+ done
+done
+
+date -u

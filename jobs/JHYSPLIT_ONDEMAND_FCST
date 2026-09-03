@@ -1,0 +1,170 @@
+#!/bin/ksh
+
+#### UNIX Script Documentation Block
+#
+# Script Name:  JHYSPLIT_FCST
+# RFC Contact:	Binyu Wang, EMC
+# Author:	Barbara Stunder, NOAA OAR Air Resources Laboratory
+# Abstract:     This is the main driver script for the HYSPLIT FCST to set the
+#               processing variables for the SDM on-demand HYSPLIT runs.  
+#               This job is run from JHYSPLIT_DATACHK
+#               following the SDM running setup_hysplit_script. DATACHK also runs
+#               JHYSPLIT_POST
+#
+# Script History Log:
+#  1999 Jun 17 - created (NCO)
+#  2002 May 23 - add test for user mgc0bs for ARL testing; please leave this for ARL testing
+#  2003 Mar 05 - frost - change ghostscript to 7.05 from 5.10
+#  2010 Apr    - restructure for multi-task version of hysplit dispersion (hysplit_hymodelm)
+#  2011 May 26 - docblock
+#
+# Usage:       
+#
+#  Script Parameters:
+#
+#  Modules and Files referenced:
+#
+#    scripts: exhysplit_fcst_setup.sh
+#             exhysplit_fcst_out.sh
+#
+#    parms:          
+#
+#    fix:               
+#
+#    executables:       
+#
+#    input file:   ${COMSTAMP}/ondemand_hysplit.stamp
+#
+#    other: 1. exhysplit_fcst_setup is run, then if successful,
+#              exhysplit_fcst_out is run
+#
+# Condition codes:
+#            err_chk should catch NCO errors, file FCST_ERR non-NCO errors
+#
+# User controllable options:
+#
+# Attributes:
+#     Language:  AIX UNIX
+#     Machine:   NCEP CCS
+#
+####
+
+set -xa
+export PS4='$SECONDS + '
+date -u
+
+# Setup directories and common environment variable
+export NET=${NET:-hysplit}
+export RUN=${RUN:-hysplit}
+# #### 06/17/99 #####################################
+# SET HYSPLIT PROCESSING VARIABLES
+# 3-05-03 frost - change ghostscript to 7.05 from 5.10
+# 12-22-08 loadleveler
+#            set both #@ output = and #@ error = to same file
+# ###################################################
+ 
+####################################
+# obtain unique process id (pid) and make temp directory
+####################################
+export pid=$$
+
+####################################
+# Determine Job Output Name on System
+####################################
+export outid=${outid:-LL$job}
+[ $envir != prod ]  && export outid="LL${job}_${envir}"
+export jobid="${outid}.o${pid}"
+export pgmout="OUTPUT.${pid}"
+
+# PATH for working directory
+export DATAROOT=${DATAROOT:-/lfs/f1/ops/$envir/tmp}
+export DATA=${DATA:-${DATAROOT}/${PBS_JOBNAME}.${PBS_JOBID}}
+mkdir -m 775 -p $DATA
+cd $DATA
+
+export SENDDBN=${SENDDBN:-NO}
+
+####################################
+# Specify Execution Areas
+####################################
+export HOMEhysplit=${HOMEhysplit:-/lfs/h1/ops/${envir}/packages/${NET}.${hysplit_ver}}
+export FIXhysplit=${FIXhysplit:-$HOMEhysplit/fix}
+export USHhysplit=${USHhysplit:-$HOMEhysplit/ush}
+export EXEChysplit=${EXEChysplit:-$HOMEhysplit/exec}
+export GESDIR=${GESDIR:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/input}
+
+msg="JOB $job HAS BEGUN"
+postmsg "$msg"
+
+##############################################
+# Run setpdy and initialize PDY variables
+##############################################
+export COMSTAMP=${COMSTAMP:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/timestamps}
+export cyc=`cat ${COMSTAMP}/ondemand_hysplit.stamp | cut -c9-10`
+export PDY=`cat ${COMSTAMP}/ondemand_hysplit.stamp | cut -c1-8`
+export cycle=t${cyc}z
+
+setpdy.sh
+. ./PDY
+export COMINROOT=${COMINROOT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})}
+export COMIN=${COMIN:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+export COMINROOTgfs=${COMINROOTgfs:-$(compath.py ${envir}/com/gfs/${gfs_ver})}
+export COMINROOTgefs=${COMINROOTgefs:-$(compath.py ${envir}/com/gefs/${gefs_ver})}
+export COMOUT=${COMOUT:-$(compath.py ${envir}/com/${NET}/${hysplit_ver})/${RUN}.${PDY}}
+
+mkdir -m 775 -p $COMOUT
+ 
+env
+
+########################################################
+# Execute the script.
+########################################################
+cpreq ${GESDIR}/hysplit.ini hysplit.ini
+
+if [ -s hysplit.ini ]; then
+  k=0
+  while read tmp; do
+    k=$((k+1))
+    case $k in
+      1) export title="$tmp" ;;
+      2) export DAT="$tmp" ;;
+    esac
+  done < hysplit.ini
+fi
+
+
+if [ "${DAT}" = "GEFS" ]; then
+  ${HOMEhysplit}/scripts/exhysplit_ondemand_fcst_setup_esmb.sh
+else
+  ${HOMEhysplit}/scripts/exhysplit_ondemand_fcst_setup.sh
+fi
+
+export err=$?; err_chk
+
+if [ -s $pgmout ]; then
+  cat $pgmout
+fi
+
+msg="$job completed normally"
+postmsg "$msg"
+
+${HOMEhysplit}/scripts/exhysplit_ondemand_fcst_out.sh
+
+export err=$?; err_chk
+  
+if [ -s $pgmout ]; then
+  cat $pgmout
+fi
+
+msg="$job completed normally"
+postmsg "$msg"
+
+##################################################
+# Remove the Temporary working directory
+##################################################
+if [ "$KEEPDATA" != "YES" ] ; then
+  cd $DATAROOT
+  rm -rf $DATA
+fi
+
+date -u
